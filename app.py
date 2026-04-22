@@ -27,8 +27,15 @@ def create_app():
     app = Flask(__name__)
     
     # Configuration
-    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'bullseye-secret-key-2024-india')
-    app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'bullseye-jwt-secret-2024')
+    secret_key = os.environ.get('SECRET_KEY')
+    jwt_secret_key = os.environ.get('JWT_SECRET_KEY')
+    if not secret_key or not jwt_secret_key:
+        raise RuntimeError(
+            "SECRET_KEY and JWT_SECRET_KEY must be set as environment variables. "
+            "Generate strong random values and add them in Render → Environment."
+        )
+    app.config['SECRET_KEY'] = secret_key
+    app.config['JWT_SECRET_KEY'] = jwt_secret_key
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
     app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
         'DATABASE_URL', 
@@ -51,7 +58,7 @@ def create_app():
         'ALLOWED_ORIGINS',
         'https://bullseye-analysis.vercel.app'
     ).split(',')
-    
+
     CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
     db.init_app(app)
     jwt = JWTManager(app)
