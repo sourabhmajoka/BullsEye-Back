@@ -47,7 +47,12 @@ def create_app():
             os.environ[k] = app.config[k]
     
     # Initialize extensions
-    CORS(app, resources={r"/*": {"origins": "https://bullseye-analysis.vercel.app"}})
+    ALLOWED_ORIGINS = os.environ.get(
+        'ALLOWED_ORIGINS',
+        'https://bullseye-analysis.vercel.app'
+    ).split(',')
+    
+    CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
     db.init_app(app)
     jwt = JWTManager(app)
     
