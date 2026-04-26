@@ -1,6 +1,22 @@
 """
-Authentication — register/login/guest + email verification
-Uses token stored in DB; sends via SMTP (Gmail App Password) or logs to console if unconfigured.
+Authentication — register / login / guest + optional email verification.
+
+KEY DESIGN DECISIONS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Login NEVER requires email verification.
+  A user who knows the correct password is the account owner.
+  Blocking login over an unclicked email permanently traps users:
+  they cannot log in (blocked) AND cannot re-register (email taken).
+
+• Email verification is a COURTESY welcome email, not an access gate.
+  On login, if is_verified is still False we silently fix it — password
+  proves ownership.
+
+• JWT tokens live for 30 days. Users must not be forced to log in
+  every 24 hours.
+
+• All users and their portfolios are permanently stored in PostgreSQL.
+  Nothing in this file deletes or expires user rows.
 """
 import os
 import secrets
@@ -8,33 +24,30 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from database import db
 from models.user import User, Portfolio
 
 auth_bp = Blueprint('auth', __name__)
 
-# ─── Email config (reads from .env) ─────────────────────────────────────────
+SMTP_EMAIL    = os.environ.get('SMTP_EMAIL',    '')
+SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
+APP_URL       = os.environ.get('APP_URL', 'http://localhost:3000')
 
-SMTP_EMAIL    = os.environ.get('SMTP_EMAIL',    '')   # your Gmail address
-SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')   # Gmail App Password
-APP_URL       = os.environ.get('APP_URL',       'http://localhost:3000')
 
 def _send_verification_email(to_email, full_name, token):
-    """Send verification email. Falls back to console log if SMTP not configured."""
+    """Send a welcome/verification email. Failure is always non-fatal."""
     verify_url = f"{APP_URL}/verify-email?token={token}"
-    
+
     if not SMTP_EMAIL or not SMTP_PASSWORD:
-        # No SMTP configured — log to console (dev mode)
         print(f"\n{'='*60}")
-        print(f"📧 EMAIL VERIFICATION (Dev Mode — no SMTP configured)")
-        print(f"   To: {to_email}")
-        print(f"   Verify URL: {verify_url}")
-        print(f"   Token: {token}")
+        print(f"📧 VERIFICATION EMAIL (Dev — SMTP not configured)")
+        print(f"   To:  {to_email}")
+        print(f"   URL: {verify_url}")
         print(f"{'='*60}\n")
         return True
-    
+
     try:
         msg = MIMEMultipart('alternative')
         msg['Subject'] = '✅ Verify your BullsEye account'
@@ -42,32 +55,30 @@ def _send_verification_email(to_email, full_name, token):
         msg['To']      = to_email
 
         html = f"""
-        <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px; background: #020617; color: #e2e8f0; border-radius: 16px;">
-          <div style="text-align: center; margin-bottom: 24px;">
-            <div style="background: linear-gradient(135deg, #10b981, #06b6d4); width: 48px; height: 48px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 12px;">
-              <span style="color: white; font-size: 20px; font-weight: 900;">📈</span>
-            </div>
-            <h1 style="color: white; margin: 0; font-size: 24px;">BullsEye</h1>
-            <p style="color: #94a3b8; margin: 4px 0 0;">Indian Stock Market Intelligence</p>
+        <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px;
+                    background:#020617;color:#e2e8f0;border-radius:16px;">
+          <div style="text-align:center;margin-bottom:24px;">
+            <h1 style="color:white;margin:0;font-size:24px;">📈 BullsEye</h1>
+            <p style="color:#94a3b8;margin:4px 0 0;">Indian Stock Market Intelligence</p>
           </div>
-          <h2 style="color: white;">Hi {full_name or 'Investor'}! 👋</h2>
-          <p style="color: #94a3b8; line-height: 1.6;">Welcome to BullsEye! Click the button below to verify your email and unlock:</p>
-          <ul style="color: #94a3b8; line-height: 1.8;">
-            <li>📊 Real-time portfolio tracking</li>
-            <li>⭐ Personalized watchlist</li>
-            <li>🤖 AI stock analysis assistant</li>
-            <li>📈 Full market analytics</li>
-          </ul>
-          <div style="text-align: center; margin: 32px 0;">
-            <a href="{verify_url}" style="background: linear-gradient(135deg, #10b981, #06b6d4); color: white; text-decoration: none; padding: 14px 32px; border-radius: 12px; font-weight: bold; font-size: 16px; display: inline-block;">
-              ✅ Verify My Email
+          <h2 style="color:white;">Hi {full_name or 'Investor'}! 👋</h2>
+          <p style="color:#94a3b8;line-height:1.6;">
+            Welcome to BullsEye! You can already log in with your password —
+            clicking below just confirms your email address.
+          </p>
+          <div style="text-align:center;margin:32px 0;">
+            <a href="{verify_url}"
+               style="background:linear-gradient(135deg,#10b981,#06b6d4);color:white;
+                      text-decoration:none;padding:14px 32px;border-radius:12px;
+                      font-weight:bold;font-size:16px;display:inline-block;">
+              ✅ Confirm My Email
             </a>
           </div>
-          <p style="color: #64748b; font-size: 12px; text-align: center;">
-            This link expires in 24 hours. If you didn't create a BullsEye account, please ignore this email.
+          <p style="color:#64748b;font-size:12px;text-align:center;">
+            If you didn't create a BullsEye account, ignore this email.
           </p>
-          <p style="color: #475569; font-size: 11px; text-align: center; margin-top: 8px;">
-            Or copy this URL: {verify_url}
+          <p style="color:#475569;font-size:11px;text-align:center;margin-top:8px;">
+            Or copy: {verify_url}
           </p>
         </div>
         """
@@ -77,17 +88,17 @@ def _send_verification_email(to_email, full_name, token):
             smtp.login(SMTP_EMAIL, SMTP_PASSWORD)
             smtp.sendmail(SMTP_EMAIL, to_email, msg.as_string())
         return True
+
     except Exception as e:
-        print(f"Email send failed: {e}")
-        print(f"Verify URL for {to_email}: {verify_url}")
+        # Email failure must NEVER block registration or login
+        print(f"⚠️  Verification email failed (non-fatal): {e}")
+        print(f"   Verify URL: {verify_url}")
         return False
 
 
-# ─── Routes ───────────────────────────────────────────────────────────────────
-
 @auth_bp.route('/register', methods=['POST'])
 def register():
-    data = request.get_json() or {}
+    data      = request.get_json() or {}
     username  = data.get('username', '').strip()
     email     = data.get('email', '').strip().lower()
     password  = data.get('password', '')
@@ -104,16 +115,17 @@ def register():
     if User.query.filter_by(email=email).first():
         return jsonify({'error': 'Email already registered'}), 409
 
-    # Generate verification token (24h expiry)
-    token    = secrets.token_urlsafe(32)
-    token_exp = datetime.utcnow() + timedelta(hours=24)
+    token     = secrets.token_urlsafe(32)
+    token_exp = datetime.utcnow() + timedelta(hours=48)
 
     user = User(
-        username=username, email=email,
+        username=username,
+        email=email,
         full_name=full_name or username,
         risk_profile=data.get('risk_profile', 'moderate'),
         investment_goal=data.get('investment_goal', ''),
-        is_verified=False,                # requires email verification
+        # Always True — password proves ownership; email link is courtesy only
+        is_verified=True,
         verification_token=token,
         verification_token_expires=token_exp,
     )
@@ -121,34 +133,58 @@ def register():
     db.session.add(user)
     db.session.flush()
 
-    # Default portfolio
-    portfolio = Portfolio(user_id=user.id, name='My Portfolio', description='Default portfolio')
+    portfolio = Portfolio(
+        user_id=user.id,
+        name='My Portfolio',
+        description='Default portfolio',
+    )
     db.session.add(portfolio)
     db.session.commit()
 
-    # Send verification email
     _send_verification_email(email, full_name or username, token)
 
-    # In dev mode (no SMTP), auto-verify for convenience
-    if not SMTP_EMAIL:
-        user.is_verified = True
-        db.session.commit()
-        jwt_token = create_access_token(identity=str(user.id))
-        return jsonify({
-            'message': 'Registration successful! (Dev mode: auto-verified)',
-            'token': jwt_token,
-            'user': user.to_dict(),
-            'dev_note': 'Configure SMTP_EMAIL and SMTP_PASSWORD in .env for real email verification'
-        }), 201
-
+    jwt_token = create_access_token(identity=str(user.id))
     return jsonify({
-        'message': 'Registration successful! Please check your email to verify your account.',
-        'email_sent': True
+        'message': 'Registration successful! Welcome to BullsEye.',
+        'token': jwt_token,
+        'user': user.to_dict(),
     }), 201
+
+
+@auth_bp.route('/login', methods=['POST'])
+def login():
+    data       = request.get_json() or {}
+    identifier = data.get('identifier', '').strip()
+    password   = data.get('password', '')
+
+    if not identifier or not password:
+        return jsonify({'error': 'Username/email and password are required'}), 400
+
+    user = User.query.filter(
+        (User.username == identifier) | (User.email == identifier.lower())
+    ).first()
+
+    if not user or not user.check_password(password):
+        return jsonify({'error': 'Invalid username/email or password'}), 401
+
+    # Password is correct — ensure is_verified is True (heals any old broken accounts)
+    if not user.is_verified:
+        user.is_verified = True
+
+    user.last_login = datetime.utcnow()
+    db.session.commit()
+
+    token = create_access_token(identity=str(user.id))
+    return jsonify({
+        'message': 'Login successful',
+        'token': token,
+        'user': user.to_dict(),
+    }), 200
 
 
 @auth_bp.route('/verify-email', methods=['POST'])
 def verify_email():
+    """Optional email confirmation link — does not affect login ability."""
     data  = request.get_json() or {}
     token = data.get('token', '').strip()
     if not token:
@@ -156,9 +192,22 @@ def verify_email():
 
     user = User.query.filter_by(verification_token=token).first()
     if not user:
-        return jsonify({'error': 'Invalid or expired verification token'}), 400
-    if user.verification_token_expires and datetime.utcnow() > user.verification_token_expires:
-        return jsonify({'error': 'Verification token has expired. Please register again.'}), 400
+        return jsonify({
+            'message': 'This link has already been used or is invalid. '
+                       'You can log in normally with your password.',
+            'already_active': True,
+        }), 200
+
+    if (user.verification_token_expires
+            and datetime.utcnow() > user.verification_token_expires):
+        user.verification_token = None
+        user.verification_token_expires = None
+        db.session.commit()
+        return jsonify({
+            'message': 'This confirmation link expired, but your account is '
+                       'fully active — log in with your password.',
+            'already_active': True,
+        }), 200
 
     user.is_verified = True
     user.verification_token = None
@@ -167,9 +216,9 @@ def verify_email():
 
     jwt_token = create_access_token(identity=str(user.id))
     return jsonify({
-        'message': 'Email verified successfully! Welcome to BullsEye.',
+        'message': 'Email confirmed! Welcome to BullsEye.',
         'token': jwt_token,
-        'user': user.to_dict()
+        'user': user.to_dict(),
     }), 200
 
 
@@ -180,64 +229,36 @@ def resend_verification():
     user  = User.query.filter_by(email=email).first()
 
     if not user:
-        # Don't reveal if email exists
-        return jsonify({'message': 'If that email is registered, a verification link has been sent.'}), 200
-    if user.is_verified:
-        return jsonify({'message': 'Your email is already verified. Please sign in.'}), 200
+        return jsonify({'message': 'If that email is registered, a link has been sent.'}), 200
 
     token     = secrets.token_urlsafe(32)
-    token_exp = datetime.utcnow() + timedelta(hours=24)
+    token_exp = datetime.utcnow() + timedelta(hours=48)
     user.verification_token = token
     user.verification_token_expires = token_exp
     db.session.commit()
 
     _send_verification_email(email, user.full_name, token)
-    return jsonify({'message': 'Verification email resent. Please check your inbox.'}), 200
-
-
-@auth_bp.route('/login', methods=['POST'])
-def login():
-    data       = request.get_json() or {}
-    identifier = data.get('identifier', '').strip()
-    password   = data.get('password', '')
-
-    if not identifier or not password:
-        return jsonify({'error': 'Credentials required'}), 400
-
-    user = User.query.filter(
-        (User.username == identifier) | (User.email == identifier.lower())
-    ).first()
-
-    if not user or not user.check_password(password):
-        return jsonify({'error': 'Invalid email/username or password'}), 401
-
-    if not user.is_guest and not user.is_verified:
-        return jsonify({
-            'error': 'Please verify your email before signing in.',
-            'needs_verification': True,
-            'email': user.email
-        }), 403
-
-    user.last_login = datetime.utcnow()
-    db.session.commit()
-
-    token = create_access_token(identity=str(user.id))
-    return jsonify({'message': 'Login successful', 'token': token, 'user': user.to_dict()}), 200
+    return jsonify({'message': 'Verification email sent. Check your inbox.'}), 200
 
 
 @auth_bp.route('/guest', methods=['POST'])
 def guest_login():
     guest = User.query.filter_by(username='guest').first()
     if not guest:
-        guest = User(username='guest', email='guest@bullseye.in',
-                     full_name='Guest User', is_guest=True, is_verified=True)
+        guest = User(
+            username='guest', email='guest@bullseye.in',
+            full_name='Guest User', is_guest=True, is_verified=True,
+        )
         guest.set_password('guest123')
         db.session.add(guest)
         db.session.commit()
+
     token = create_access_token(identity=str(guest.id))
     return jsonify({
-        'message': 'Guest access granted', 'token': token, 'user': guest.to_dict(),
-        'limitations': ['No portfolio', 'No watchlist', 'No AI assistant', 'Read-only data']
+        'message': 'Guest access granted',
+        'token': token,
+        'user': guest.to_dict(),
+        'limitations': ['No portfolio', 'No watchlist', 'No AI assistant', 'Read-only data'],
     }), 200
 
 

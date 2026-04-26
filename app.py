@@ -36,12 +36,35 @@ def create_app():
         )
     app.config['SECRET_KEY'] = secret_key
     app.config['JWT_SECRET_KEY'] = jwt_secret_key
-    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
-        'DATABASE_URL', 
-        f"sqlite:///{os.path.join(os.path.dirname(__file__), 'bullseye.db')}"
-    )
+    # 30 days — users should stay logged in across normal usage patterns.
+    # They log out explicitly, not because a token silently expired overnight.
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=30)
+
+    # PostgreSQL — fix Render's legacy "postgres://" scheme
+    database_url = os.environ.get('DATABASE_URL')
+    if not database_url:
+        raise RuntimeError(
+            "DATABASE_URL must be set. "
+            "Example: postgresql://user:password@host:5432/bullseye"
+        )
+    if database_url.startswith("postgres://"):
+        database_url = database_url.replace("postgres://", "postgresql://", 1)
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+    # Connection pool tuning for Render free tier.
+    # Render sleeps after 15 min inactivity; idle connections go stale.
+    # pool_pre_ping tests each connection before use and recycles dead ones,
+    # so the first request after a sleep period never throws a connection error.
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_pre_ping': True,       # test connection health before every use
+        'pool_recycle': 280,         # recycle connections every ~4.5 min
+        'pool_size': 5,              # keep 5 connections open
+        'max_overflow': 10,          # allow up to 10 extra under load
+        'connect_args': {
+            'connect_timeout': 10,   # fail fast if DB is unreachable
+        },
+    }
     
     # AI API Keys (set any ONE in .env to enable full AI)
     app.config['GROQ_API_KEY']   = os.environ.get('GROQ_API_KEY', '')
@@ -54,10 +77,9 @@ def create_app():
             os.environ[k] = app.config[k]
     
     # Initialize extensions
-    ALLOWED_ORIGINS = os.environ.get(
-        'ALLOWED_ORIGINS',
-        'https://bullseye-analysis.vercel.app'
-    ).split(',')
+    # Allow both Vercel production URL and localhost for local dev
+    default_origins = 'https://bullseye-analysis.vercel.app,http://localhost:3000,http://127.0.0.1:3000'
+    ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', default_origins).split(',')
 
     CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
     db.init_app(app)
