@@ -1,22 +1,15 @@
 """
-Authentication — register / login / guest + optional email verification.
+Authentication routes for BullsEye.
 
-KEY DESIGN DECISIONS:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Login NEVER requires email verification.
-  A user who knows the correct password is the account owner.
-  Blocking login over an unclicked email permanently traps users:
-  they cannot log in (blocked) AND cannot re-register (email taken).
+VERIFICATION FLOW:
+  1. POST /register  → creates user with is_verified=False, sends email, returns NO token
+  2. User clicks link → GET /verify-email?token=... (frontend) → POST /verify-email {token}
+  3. POST /verify-email → sets is_verified=True, returns JWT (user is now logged in)
+  4. POST /login → blocked with needs_verification=True if not verified
+  5. POST /resend-verification → issues fresh 48h token, resends email
 
-• Email verification is a COURTESY welcome email, not an access gate.
-  On login, if is_verified is still False we silently fix it — password
-  proves ownership.
-
-• JWT tokens live for 30 days. Users must not be forced to log in
-  every 24 hours.
-
-• All users and their portfolios are permanently stored in PostgreSQL.
-  Nothing in this file deletes or expires user rows.
+Once verified, the user row is permanent in PostgreSQL forever.
+JWT lasts 30 days — users stay logged in across normal usage.
 """
 import os
 import secrets
@@ -37,14 +30,14 @@ APP_URL       = os.environ.get('APP_URL', 'http://localhost:3000')
 
 
 def _send_verification_email(to_email, full_name, token):
-    """Send a welcome/verification email. Failure is always non-fatal."""
+    """Send verification email. Always non-fatal — logs to console if SMTP unconfigured."""
     verify_url = f"{APP_URL}/verify-email?token={token}"
 
     if not SMTP_EMAIL or not SMTP_PASSWORD:
         print(f"\n{'='*60}")
-        print(f"📧 VERIFICATION EMAIL (Dev — SMTP not configured)")
-        print(f"   To:  {to_email}")
-        print(f"   URL: {verify_url}")
+        print(f"[DEV] Verification email not sent — SMTP not configured.")
+        print(f"  To:  {to_email}")
+        print(f"  URL: {verify_url}")
         print(f"{'='*60}\n")
         return True
 
@@ -53,7 +46,6 @@ def _send_verification_email(to_email, full_name, token):
         msg['Subject'] = '✅ Verify your BullsEye account'
         msg['From']    = SMTP_EMAIL
         msg['To']      = to_email
-
         html = f"""
         <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px;
                     background:#020617;color:#e2e8f0;border-radius:16px;">
@@ -63,35 +55,32 @@ def _send_verification_email(to_email, full_name, token):
           </div>
           <h2 style="color:white;">Hi {full_name or 'Investor'}! 👋</h2>
           <p style="color:#94a3b8;line-height:1.6;">
-            Welcome to BullsEye! You can already log in with your password —
-            clicking below just confirms your email address.
+            Thanks for signing up! Click the button below to verify your email
+            and activate your account.
           </p>
           <div style="text-align:center;margin:32px 0;">
             <a href="{verify_url}"
                style="background:linear-gradient(135deg,#10b981,#06b6d4);color:white;
                       text-decoration:none;padding:14px 32px;border-radius:12px;
                       font-weight:bold;font-size:16px;display:inline-block;">
-              ✅ Confirm My Email
+              ✅ Verify My Email
             </a>
           </div>
           <p style="color:#64748b;font-size:12px;text-align:center;">
-            If you didn't create a BullsEye account, ignore this email.
+            This link expires in 48 hours. Didn't sign up? Ignore this email.
           </p>
           <p style="color:#475569;font-size:11px;text-align:center;margin-top:8px;">
-            Or copy: {verify_url}
+            Or copy this link: {verify_url}
           </p>
         </div>
         """
         msg.attach(MIMEText(html, 'html'))
-
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
             smtp.login(SMTP_EMAIL, SMTP_PASSWORD)
             smtp.sendmail(SMTP_EMAIL, to_email, msg.as_string())
         return True
-
     except Exception as e:
-        # Email failure must NEVER block registration or login
-        print(f"⚠️  Verification email failed (non-fatal): {e}")
+        print(f"⚠️  Email send failed (non-fatal): {e}")
         print(f"   Verify URL: {verify_url}")
         return False
 
@@ -113,7 +102,7 @@ def register():
     if User.query.filter_by(username=username).first():
         return jsonify({'error': 'Username already taken'}), 409
     if User.query.filter_by(email=email).first():
-        return jsonify({'error': 'Email already registered'}), 409
+        return jsonify({'error': 'Email already registered — please sign in'}), 409
 
     token     = secrets.token_urlsafe(32)
     token_exp = datetime.utcnow() + timedelta(hours=48)
@@ -124,8 +113,7 @@ def register():
         full_name=full_name or username,
         risk_profile=data.get('risk_profile', 'moderate'),
         investment_goal=data.get('investment_goal', ''),
-        # Always True — password proves ownership; email link is courtesy only
-        is_verified=True,
+        is_verified=False,                          # must click email link to activate
         verification_token=token,
         verification_token_expires=token_exp,
     )
@@ -133,6 +121,7 @@ def register():
     db.session.add(user)
     db.session.flush()
 
+    # Portfolio is created now and kept permanently — even before verification
     portfolio = Portfolio(
         user_id=user.id,
         name='My Portfolio',
@@ -141,13 +130,14 @@ def register():
     db.session.add(portfolio)
     db.session.commit()
 
-    _send_verification_email(email, full_name or username, token)
+    email_sent = _send_verification_email(email, full_name or username, token)
 
-    jwt_token = create_access_token(identity=str(user.id))
+    # Return NO token — user must verify email before they can log in
     return jsonify({
-        'message': 'Registration successful! Welcome to BullsEye.',
-        'token': jwt_token,
-        'user': user.to_dict(),
+        'message': 'Account created! Please check your email to verify your account before signing in.',
+        'needs_verification': True,
+        'email': email,
+        'email_sent': email_sent,
     }), 201
 
 
@@ -164,12 +154,17 @@ def login():
         (User.username == identifier) | (User.email == identifier.lower())
     ).first()
 
+    # Wrong credentials — generic message (no info leak about whether user exists)
     if not user or not user.check_password(password):
         return jsonify({'error': 'Invalid username/email or password'}), 401
 
-    # Password is correct — ensure is_verified is True (heals any old broken accounts)
+    # Correct password but email not yet verified
     if not user.is_verified:
-        user.is_verified = True
+        return jsonify({
+            'error': 'Please verify your email before signing in.',
+            'needs_verification': True,
+            'email': user.email,
+        }), 403
 
     user.last_login = datetime.utcnow()
     db.session.commit()
@@ -184,39 +179,45 @@ def login():
 
 @auth_bp.route('/verify-email', methods=['POST'])
 def verify_email():
-    """Optional email confirmation link — does not affect login ability."""
+    """
+    Called when user clicks the link in their email.
+    On success: marks is_verified=True and returns a JWT so they are logged in immediately.
+    """
     data  = request.get_json() or {}
     token = data.get('token', '').strip()
     if not token:
-        return jsonify({'error': 'Verification token required'}), 400
+        return jsonify({'error': 'Verification token is required'}), 400
 
     user = User.query.filter_by(verification_token=token).first()
+
     if not user:
+        # Token already used (verification_token is cleared after use) or invalid
         return jsonify({
-            'message': 'This link has already been used or is invalid. '
-                       'You can log in normally with your password.',
-            'already_active': True,
-        }), 200
+            'error': 'This link has already been used or is invalid. '
+                     'If your account is not yet active, request a new link below.',
+            'already_used': True,
+        }), 400
 
     if (user.verification_token_expires
             and datetime.utcnow() > user.verification_token_expires):
-        user.verification_token = None
-        user.verification_token_expires = None
-        db.session.commit()
+        # Expired but user is registered — they just need a fresh link
         return jsonify({
-            'message': 'This confirmation link expired, but your account is '
-                       'fully active — log in with your password.',
-            'already_active': True,
-        }), 200
+            'error': 'This verification link has expired. '
+                     'Please request a new one — your account is saved and waiting.',
+            'expired': True,
+            'email': user.email,
+        }), 400
 
+    # ✅ Valid — activate the account
     user.is_verified = True
-    user.verification_token = None
+    user.verification_token = None            # consume the token (one-time use)
     user.verification_token_expires = None
+    user.last_login = datetime.utcnow()
     db.session.commit()
 
     jwt_token = create_access_token(identity=str(user.id))
     return jsonify({
-        'message': 'Email confirmed! Welcome to BullsEye.',
+        'message': 'Email verified! Welcome to BullsEye.',
         'token': jwt_token,
         'user': user.to_dict(),
     }), 200
@@ -224,12 +225,20 @@ def verify_email():
 
 @auth_bp.route('/resend-verification', methods=['POST'])
 def resend_verification():
+    """Issues a fresh 48h token and resends the email. Safe to call multiple times."""
     data  = request.get_json() or {}
     email = data.get('email', '').strip().lower()
-    user  = User.query.filter_by(email=email).first()
 
+    if not email:
+        return jsonify({'error': 'Email is required'}), 400
+
+    user = User.query.filter_by(email=email).first()
+    # Don't reveal whether the email is registered
     if not user:
-        return jsonify({'message': 'If that email is registered, a link has been sent.'}), 200
+        return jsonify({'message': 'If that email is registered, a new link has been sent.'}), 200
+
+    if user.is_verified:
+        return jsonify({'message': 'Your email is already verified — please sign in.'}), 200
 
     token     = secrets.token_urlsafe(32)
     token_exp = datetime.utcnow() + timedelta(hours=48)
@@ -238,7 +247,7 @@ def resend_verification():
     db.session.commit()
 
     _send_verification_email(email, user.full_name, token)
-    return jsonify({'message': 'Verification email sent. Check your inbox.'}), 200
+    return jsonify({'message': 'Verification email resent! Check your inbox (and spam folder).'}), 200
 
 
 @auth_bp.route('/guest', methods=['POST'])
@@ -252,7 +261,6 @@ def guest_login():
         guest.set_password('guest123')
         db.session.add(guest)
         db.session.commit()
-
     token = create_access_token(identity=str(guest.id))
     return jsonify({
         'message': 'Guest access granted',
