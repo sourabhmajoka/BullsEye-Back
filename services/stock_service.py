@@ -840,7 +840,7 @@ def get_sector_performance():
 
 def get_batch_quotes(symbols):
     res = {}
-    for sym in symbols[:20]:
+    for sym in symbols[:50]:
         res[sym] = get_stock_quote(sym)
         time.sleep(0.02)
     return res

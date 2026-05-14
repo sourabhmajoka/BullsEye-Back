@@ -312,3 +312,29 @@ def change_password():
     user.set_password(new_pwd)
     db.session.commit()
     return jsonify({'message': 'Password changed successfully'}), 200
+
+
+@auth_bp.route('/delete-account', methods=['DELETE'])
+@jwt_required()
+def delete_account():
+    """
+    Permanently delete the authenticated user and all their data.
+    Requires the user's password as confirmation.
+    After deletion the username and email are free for re-registration.
+    """
+    uid  = int(get_jwt_identity())
+    user = User.query.get(uid)
+    if not user or user.is_guest:
+        return jsonify({'error': 'Not allowed'}), 403
+    data = request.get_json() or {}
+    if not user.check_password(data.get('password', '')):
+        return jsonify({'error': 'Incorrect password — please try again'}), 400
+
+    # Delete records that have no cascade from User (Transaction foreign key is not cascaded)
+    from sqlalchemy import text
+    db.session.execute(text('DELETE FROM transactions WHERE user_id = :uid'), {'uid': uid})
+    db.session.execute(text('DELETE FROM ai_conversations WHERE user_id = :uid'), {'uid': uid})
+    # Cascades handle: portfolios → holdings, watchlists
+    db.session.delete(user)
+    db.session.commit()
+    return jsonify({'message': 'Account permanently deleted'}), 200
