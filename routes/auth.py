@@ -69,7 +69,7 @@ def _send_verification_email(to_email, full_name, token):
     """
 
     payload = _json.dumps({
-        "sender":   {"name": "BullsEye", "email": "noreply@bullseye.app"},
+        "sender":   {"name": "BullsEye", "email": "analysis.bullseye@gmail.com"},
         "to":       [{"email": to_email}],
         "subject":  "✅ Verify your BullsEye account",
         "htmlContent": html,
