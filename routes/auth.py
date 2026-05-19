@@ -23,16 +23,17 @@ from models.user import User, Portfolio
 
 auth_bp = Blueprint('auth', __name__)
 
-RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
-APP_URL        = os.environ.get('APP_URL', 'http://localhost:3000')
+BREVO_API_KEY = os.environ.get('BREVO_API_KEY', '')
+APP_URL       = os.environ.get('APP_URL', 'http://localhost:3000')
+
 
 def _send_verification_email(to_email, full_name, token):
-    """Send verification email via Resend HTTP API (works on Render free tier)."""
+    """Send verification email via Brevo HTTP API."""
     verify_url = f"{APP_URL}/verify-email?token={token}"
 
-    if not RESEND_API_KEY:
+    if not BREVO_API_KEY:
         print(f"\n{'='*60}")
-        print(f"[DEV] Verification email not sent — RESEND_API_KEY not set.")
+        print(f"[DEV] Verification email not sent — BREVO_API_KEY not set.")
         print(f"  To:  {to_email}")
         print(f"  URL: {verify_url}")
         print(f"{'='*60}\n")
@@ -68,26 +69,26 @@ def _send_verification_email(to_email, full_name, token):
     """
 
     payload = _json.dumps({
-        "from": "BullsEye <onboarding@resend.dev>",
-        "to": [to_email],
-        "subject": "✅ Verify your BullsEye account",
-        "html": html,
+        "sender":   {"name": "BullsEye", "email": "noreply@bullseye.app"},
+        "to":       [{"email": to_email}],
+        "subject":  "✅ Verify your BullsEye account",
+        "htmlContent": html,
     }).encode()
 
     req = urllib.request.Request(
-        "https://api.resend.com/emails",
+        "https://api.brevo.com/v3/smtp/email",
         data=payload,
         headers={
-            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "api-key":      BREVO_API_KEY,
             "Content-Type": "application/json",
         },
         method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status == 200
+            return resp.status == 201
     except Exception as e:
-        print(f"⚠️  Email send failed (non-fatal): {e}")
+        print(f"⚠️  Email send failed (non-fatal): {type(e).__name__}: {e}")
         print(f"   Verify URL: {verify_url}")
         return False
     
