@@ -13,9 +13,8 @@ JWT lasts 30 days — users stay logged in across normal usage.
 """
 import os
 import secrets
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import urllib.request
+import json as _json
 from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
@@ -24,66 +23,74 @@ from models.user import User, Portfolio
 
 auth_bp = Blueprint('auth', __name__)
 
-SMTP_EMAIL    = os.environ.get('SMTP_EMAIL',    '')
-SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
-APP_URL       = os.environ.get('APP_URL', 'http://localhost:3000')
-
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
+APP_URL        = os.environ.get('APP_URL', 'http://localhost:3000')
 
 def _send_verification_email(to_email, full_name, token):
-    """Send verification email. Always non-fatal — logs to console if SMTP unconfigured."""
+    """Send verification email via Resend HTTP API (works on Render free tier)."""
     verify_url = f"{APP_URL}/verify-email?token={token}"
 
-    if not SMTP_EMAIL or not SMTP_PASSWORD:
+    if not RESEND_API_KEY:
         print(f"\n{'='*60}")
-        print(f"[DEV] Verification email not sent — SMTP not configured.")
+        print(f"[DEV] Verification email not sent — RESEND_API_KEY not set.")
         print(f"  To:  {to_email}")
         print(f"  URL: {verify_url}")
         print(f"{'='*60}\n")
         return True
 
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px;
+                background:#020617;color:#e2e8f0;border-radius:16px;">
+      <div style="text-align:center;margin-bottom:24px;">
+        <h1 style="color:white;margin:0;font-size:24px;">📈 BullsEye</h1>
+        <p style="color:#94a3b8;margin:4px 0 0;">Indian Stock Market Intelligence</p>
+      </div>
+      <h2 style="color:white;">Hi {full_name or 'Investor'}! 👋</h2>
+      <p style="color:#94a3b8;line-height:1.6;">
+        Thanks for signing up! Click the button below to verify your email
+        and activate your account.
+      </p>
+      <div style="text-align:center;margin:32px 0;">
+        <a href="{verify_url}"
+           style="background:linear-gradient(135deg,#10b981,#06b6d4);color:white;
+                  text-decoration:none;padding:14px 32px;border-radius:12px;
+                  font-weight:bold;font-size:16px;display:inline-block;">
+          ✅ Verify My Email
+        </a>
+      </div>
+      <p style="color:#64748b;font-size:12px;text-align:center;">
+        This link expires in 48 hours. Didn't sign up? Ignore this email.
+      </p>
+      <p style="color:#475569;font-size:11px;text-align:center;margin-top:8px;">
+        Or copy this link: {verify_url}
+      </p>
+    </div>
+    """
+
+    payload = _json.dumps({
+        "from": "BullsEye <onboarding@resend.dev>",
+        "to": [to_email],
+        "subject": "✅ Verify your BullsEye account",
+        "html": html,
+    }).encode()
+
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
     try:
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = '✅ Verify your BullsEye account'
-        msg['From']    = SMTP_EMAIL
-        msg['To']      = to_email
-        html = f"""
-        <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px;
-                    background:#020617;color:#e2e8f0;border-radius:16px;">
-          <div style="text-align:center;margin-bottom:24px;">
-            <h1 style="color:white;margin:0;font-size:24px;">📈 BullsEye</h1>
-            <p style="color:#94a3b8;margin:4px 0 0;">Indian Stock Market Intelligence</p>
-          </div>
-          <h2 style="color:white;">Hi {full_name or 'Investor'}! 👋</h2>
-          <p style="color:#94a3b8;line-height:1.6;">
-            Thanks for signing up! Click the button below to verify your email
-            and activate your account.
-          </p>
-          <div style="text-align:center;margin:32px 0;">
-            <a href="{verify_url}"
-               style="background:linear-gradient(135deg,#10b981,#06b6d4);color:white;
-                      text-decoration:none;padding:14px 32px;border-radius:12px;
-                      font-weight:bold;font-size:16px;display:inline-block;">
-              ✅ Verify My Email
-            </a>
-          </div>
-          <p style="color:#64748b;font-size:12px;text-align:center;">
-            This link expires in 48 hours. Didn't sign up? Ignore this email.
-          </p>
-          <p style="color:#475569;font-size:11px;text-align:center;margin-top:8px;">
-            Or copy this link: {verify_url}
-          </p>
-        </div>
-        """
-        msg.attach(MIMEText(html, 'html'))
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(SMTP_EMAIL, SMTP_PASSWORD)
-            smtp.sendmail(SMTP_EMAIL, to_email, msg.as_string())
-        return True
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status == 200
     except Exception as e:
         print(f"⚠️  Email send failed (non-fatal): {e}")
         print(f"   Verify URL: {verify_url}")
         return False
-
+    
 
 @auth_bp.route('/register', methods=['POST'])
 def register():
