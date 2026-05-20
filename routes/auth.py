@@ -108,7 +108,7 @@ def _send_deletion_email(to_email, full_name, username, by_admin=False):
       <h2 style="color:white;">Hi {full_name or 'there'}! 👋</h2>
       <p style="color:#94a3b8;line-height:1.6;">
         Your BullsEye account has been <strong style="color:#f87171;">permanently deleted</strong>
-        {'by our admin team due to a violation of our terms or a maintenance action.' if by_admin else 'as requested. We\'re sorry to see you go.'}
+        {'by our admin team due to a violation of our terms or a maintenance action.' if by_admin else "as requested. We're sorry to see you go."}
       </p>
 
       <div style="background:#0f172a;border-radius:12px;padding:20px;margin:24px 0;">
