@@ -92,6 +92,155 @@ def _send_verification_email(to_email, full_name, token):
         print(f"   Verify URL: {verify_url}")
         return False
     
+def _send_deletion_email(to_email, full_name, username):
+    """Send account deletion confirmation email via Brevo."""
+    if not BREVO_API_KEY:
+        print(f"[DEV] Deletion email not sent — BREVO_API_KEY not set. To: {to_email}")
+        return
+
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px;
+                background:#020617;color:#e2e8f0;border-radius:16px;">
+      <div style="text-align:center;margin-bottom:24px;">
+        <h1 style="color:white;margin:0;font-size:24px;">📈 BullsEye</h1>
+        <p style="color:#94a3b8;margin:4px 0 0;">Indian Stock Market Intelligence</p>
+      </div>
+      <h2 style="color:white;">Hi {full_name or 'there'}! 👋</h2>
+      <p style="color:#94a3b8;line-height:1.6;">
+        Your BullsEye account has been <strong style="color:#f87171;">permanently deleted</strong>
+        as requested. We're sorry to see you go.
+      </p>
+
+      <div style="background:#0f172a;border-radius:12px;padding:20px;margin:24px 0;">
+        <p style="color:#94a3b8;margin:0 0 12px;font-weight:bold;">What was deleted:</p>
+        <ul style="color:#64748b;line-height:2;margin:0;padding-left:20px;">
+          <li>Your portfolio and all holdings</li>
+          <li>Your watchlist</li>
+          <li>Your transaction history</li>
+          <li>Your AI conversation history</li>
+          <li>Your account settings and preferences</li>
+        </ul>
+      </div>
+
+      <div style="background:#0f172a;border-left:3px solid #10b981;border-radius:8px;
+                  padding:16px 20px;margin:24px 0;">
+        <p style="color:#94a3b8;margin:0;font-size:13px;line-height:1.8;">
+          📝 <strong style="color:#e2e8f0;">Note:</strong> Your personal details —
+          name (<strong style="color:#e2e8f0;">{full_name}</strong>),
+          username (<strong style="color:#e2e8f0;">@{username}</strong>), and
+          email (<strong style="color:#e2e8f0;">{to_email}</strong>) —
+          have been completely removed from our database and are
+          <strong style="color:#10b981;">free to be used by any new user</strong>.
+        </p>
+      </div>
+
+      <p style="color:#94a3b8;line-height:1.6;">
+        If you ever change your mind, you're always welcome to create a new account.
+      </p>
+
+      <p style="color:#475569;font-size:11px;text-align:center;margin-top:24px;">
+        If you did not request this deletion, please contact us immediately.
+      </p>
+    </div>
+    """
+
+    payload = _json.dumps({
+        "sender":      {"name": "BullsEye", "email": "majoka193@gmail.com"},
+        "to":          [{"email": to_email}],
+        "subject":     "🗑️ Your BullsEye account has been deleted",
+        "htmlContent": html,
+    }).encode()
+
+    req = urllib.request.Request(
+        "https://api.brevo.com/v3/smtp/email",
+        data=payload,
+        headers={
+            "api-key":      BREVO_API_KEY,
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status == 201
+    except Exception as e:
+        print(f"⚠️  Deletion email send failed (non-fatal): {type(e).__name__}: {e}")
+
+def _send_welcome_email(to_email, full_name, username):
+    """Send welcome email after successful email verification."""
+    if not BREVO_API_KEY:
+        print(f"[DEV] Welcome email not sent — BREVO_API_KEY not set. To: {to_email}")
+        return
+
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px;
+                background:#020617;color:#e2e8f0;border-radius:16px;">
+      <div style="text-align:center;margin-bottom:24px;">
+        <h1 style="color:white;margin:0;font-size:24px;">📈 BullsEye</h1>
+        <p style="color:#94a3b8;margin:4px 0 0;">Indian Stock Market Intelligence</p>
+      </div>
+
+      <h2 style="color:white;">Welcome to BullsEye, {full_name or 'Investor'}! 🎉</h2>
+      <p style="color:#94a3b8;line-height:1.6;">
+        Your email has been verified and your account is now fully active.
+        Here's what you can do with BullsEye:
+      </p>
+
+      <div style="background:#0f172a;border-radius:12px;padding:20px;margin:24px 0;">
+        <ul style="color:#94a3b8;line-height:2.2;margin:0;padding-left:20px;">
+          <li>📊 <strong style="color:#e2e8f0;">Track your portfolio</strong> — add and monitor your Indian stock holdings</li>
+          <li>👀 <strong style="color:#e2e8f0;">Watchlist</strong> — keep an eye on stocks you're interested in</li>
+          <li>🤖 <strong style="color:#e2e8f0;">AI Assistant</strong> — get intelligent market insights</li>
+          <li>📈 <strong style="color:#e2e8f0;">Live market data</strong> — indices, movers, and sector performance</li>
+        </ul>
+      </div>
+
+      <div style="background:#0f172a;border-left:3px solid #10b981;border-radius:8px;
+                  padding:16px 20px;margin:24px 0;">
+        <p style="color:#94a3b8;margin:0;font-size:13px;line-height:1.8;">
+          👤 Your account details:<br/>
+          <strong style="color:#e2e8f0;">Name:</strong> {full_name}<br/>
+          <strong style="color:#e2e8f0;">Username:</strong> @{username}<br/>
+          <strong style="color:#e2e8f0;">Email:</strong> {to_email}
+        </p>
+      </div>
+
+      <div style="text-align:center;margin:32px 0;">
+        <a href="{APP_URL}"
+           style="background:linear-gradient(135deg,#10b981,#06b6d4);color:white;
+                  text-decoration:none;padding:14px 32px;border-radius:12px;
+                  font-weight:bold;font-size:16px;display:inline-block;">
+          🚀 Go to BullsEye
+        </a>
+      </div>
+
+      <p style="color:#475569;font-size:11px;text-align:center;margin-top:8px;">
+        Happy investing, @{username}!
+      </p>
+    </div>
+    """
+
+    payload = _json.dumps({
+        "sender":      {"name": "BullsEye", "email": "majoka193@gmail.com"},
+        "to":          [{"email": to_email}],
+        "subject":     "🎉 Welcome to BullsEye — You're all set!",
+        "htmlContent": html,
+    }).encode()
+
+    req = urllib.request.Request(
+        "https://api.brevo.com/v3/smtp/email",
+        data=payload,
+        headers={
+            "api-key":      BREVO_API_KEY,
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status == 201
+    except Exception as e:
+        print(f"⚠️  Welcome email send failed (non-fatal): {type(e).__name__}: {e}")
 
 @auth_bp.route('/register', methods=['POST'])
 def register():
@@ -216,12 +365,14 @@ def verify_email():
             'email': user.email,
         }), 400
 
-    # ✅ Valid — activate the account
     user.is_verified = True
-    user.verification_token = None            # consume the token (one-time use)
+    user.verification_token = None
     user.verification_token_expires = None
     user.last_login = datetime.utcnow()
     db.session.commit()
+
+    # Send welcome email on first verified login
+    _send_welcome_email(user.email, user.full_name, user.username)
 
     jwt_token = create_access_token(identity=str(user.id))
     return jsonify({
@@ -338,6 +489,11 @@ def delete_account():
     if not user.check_password(data.get('password', '')):
         return jsonify({'error': 'Incorrect password — please try again'}), 400
 
+    # Save details before deletion for the goodbye email
+    deleted_email    = user.email
+    deleted_name     = user.full_name
+    deleted_username = user.username
+
     # Delete records that have no cascade from User (Transaction foreign key is not cascaded)
     from sqlalchemy import text
     db.session.execute(text('DELETE FROM transactions WHERE user_id = :uid'), {'uid': uid})
@@ -345,4 +501,8 @@ def delete_account():
     # Cascades handle: portfolios → holdings, watchlists
     db.session.delete(user)
     db.session.commit()
+
+    # Send goodbye email after successful deletion
+    _send_deletion_email(deleted_email, deleted_name, deleted_username)
+
     return jsonify({'message': 'Account permanently deleted'}), 200
