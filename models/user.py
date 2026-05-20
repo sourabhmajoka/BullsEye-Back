@@ -20,6 +20,10 @@ class User(db.Model):
     investment_goal = db.Column(db.String(50), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_login = db.Column(db.DateTime, nullable=True)
+    is_banned    = db.Column(db.Boolean,     default=False)
+    ban_reason   = db.Column(db.String(500), nullable=True)
+    banned_until = db.Column(db.DateTime,    nullable=True)  # None = manual only
+    banned_at    = db.Column(db.DateTime,    nullable=True)
     
     # Relationships
     portfolios = db.relationship('Portfolio', backref='user', lazy=True, cascade='all, delete-orphan')
@@ -44,7 +48,11 @@ class User(db.Model):
             'risk_profile': self.risk_profile,
             'investment_goal': self.investment_goal,
             'created_at': self.created_at.isoformat() if self.created_at else None,
-            'last_login': self.last_login.isoformat() if self.last_login else None
+            'last_login': self.last_login.isoformat() if self.last_login else None,
+            'is_banned':    self.is_banned,
+            'ban_reason':   self.ban_reason,
+            'banned_until': self.banned_until.isoformat() if self.banned_until else None,
+            'banned_at':    self.banned_at.isoformat()    if self.banned_at    else None,
         }
 
 

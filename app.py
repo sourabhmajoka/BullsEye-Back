@@ -8,6 +8,7 @@ from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from database import db, init_db
 from routes.auth import auth_bp
+from routes.admin import admin_bp
 from routes.stocks import stocks_bp
 from routes.portfolio import portfolio_bp
 from routes.market import market_bp
@@ -87,6 +88,7 @@ def create_app():
     
     # Register blueprints
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
+    app.register_blueprint(admin_bp, url_prefix='/api/admin')
     app.register_blueprint(stocks_bp, url_prefix='/api/stocks')
     app.register_blueprint(portfolio_bp, url_prefix='/api/portfolio')
     app.register_blueprint(market_bp, url_prefix='/api/market')

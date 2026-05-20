@@ -92,7 +92,7 @@ def _send_verification_email(to_email, full_name, token):
         print(f"   Verify URL: {verify_url}")
         return False
     
-def _send_deletion_email(to_email, full_name, username):
+def _send_deletion_email(to_email, full_name, username, by_admin=False):
     """Send account deletion confirmation email via Brevo."""
     if not BREVO_API_KEY:
         print(f"[DEV] Deletion email not sent — BREVO_API_KEY not set. To: {to_email}")
@@ -108,7 +108,7 @@ def _send_deletion_email(to_email, full_name, username):
       <h2 style="color:white;">Hi {full_name or 'there'}! 👋</h2>
       <p style="color:#94a3b8;line-height:1.6;">
         Your BullsEye account has been <strong style="color:#f87171;">permanently deleted</strong>
-        as requested. We're sorry to see you go.
+        {'by our admin team due to a violation of our terms or a maintenance action.' if by_admin else 'as requested. We\'re sorry to see you go.'}
       </p>
 
       <div style="background:#0f172a;border-radius:12px;padding:20px;margin:24px 0;">
@@ -165,6 +165,169 @@ def _send_deletion_email(to_email, full_name, username):
             return resp.status == 201
     except Exception as e:
         print(f"⚠️  Deletion email send failed (non-fatal): {type(e).__name__}: {e}")
+
+def _send_ban_email(to_email, full_name, username, reason, banned_until):
+    """Send suspension email via Brevo."""
+    if not BREVO_API_KEY:
+        print(f"[DEV] Ban email not sent — BREVO_API_KEY not set. To: {to_email}")
+        return
+
+    duration_text = (
+        f"until <strong style='color:#e2e8f0;'>{banned_until.strftime('%d %b %Y')}</strong>"
+        if banned_until
+        else "<strong style='color:#e2e8f0;'>indefinitely</strong> (manual review required)"
+    )
+    reason_block = (
+        f"<div style='background:#0f172a;border-left:3px solid #f87171;border-radius:8px;"
+        f"padding:16px 20px;margin:24px 0;'><p style='color:#94a3b8;margin:0;font-size:13px;'>"
+        f"<strong style='color:#e2e8f0;'>Reason:</strong> {reason}</p></div>"
+    ) if reason else ''
+
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px;
+                background:#020617;color:#e2e8f0;border-radius:16px;">
+      <div style="text-align:center;margin-bottom:24px;">
+        <h1 style="color:white;margin:0;font-size:24px;">📈 BullsEye</h1>
+        <p style="color:#94a3b8;margin:4px 0 0;">Indian Stock Market Intelligence</p>
+      </div>
+      <h2 style="color:#f87171;">Account Suspended ⚠️</h2>
+      <p style="color:#94a3b8;line-height:1.6;">
+        Hi <strong style="color:#e2e8f0;">{full_name or username}</strong>,<br/><br/>
+        Your BullsEye account (<strong style="color:#e2e8f0;">@{username}</strong>) has been
+        <strong style="color:#f87171;">suspended</strong> by our admin team {duration_text}.
+      </p>
+      {reason_block}
+      <p style="color:#94a3b8;line-height:1.6;">
+        {'Your account will be automatically reinstated after the suspension period ends.' if banned_until else 'Your account will remain suspended until reviewed by our team.'}
+        During this period you will not be able to sign in.
+      </p>
+      <p style="color:#475569;font-size:11px;text-align:center;margin-top:24px;">
+        If you believe this is a mistake, please contact support.
+      </p>
+    </div>
+    """
+
+    payload = _json.dumps({
+        "sender":      {"name": "BullsEye", "email": "analysis.bullseye@gmail.com"},
+        "to":          [{"email": to_email}],
+        "subject":     "⚠️ Your BullsEye account has been suspended",
+        "htmlContent": html,
+    }).encode()
+
+    req = urllib.request.Request(
+        "https://api.brevo.com/v3/smtp/email",
+        data=payload,
+        headers={"api-key": BREVO_API_KEY, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status == 201
+    except Exception as e:
+        print(f"⚠️  Ban email failed: {e}")
+
+
+def _send_unban_email(to_email, full_name, username, auto_expired=False):
+    """Send reinstatement email via Brevo."""
+    if not BREVO_API_KEY:
+        print(f"[DEV] Unban email not sent — BREVO_API_KEY not set. To: {to_email}")
+        return
+
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px;
+                background:#020617;color:#e2e8f0;border-radius:16px;">
+      <div style="text-align:center;margin-bottom:24px;">
+        <h1 style="color:white;margin:0;font-size:24px;">📈 BullsEye</h1>
+        <p style="color:#94a3b8;margin:4px 0 0;">Indian Stock Market Intelligence</p>
+      </div>
+      <h2 style="color:#10b981;">Account Reinstated ✅</h2>
+      <p style="color:#94a3b8;line-height:1.6;">
+        Hi <strong style="color:#e2e8f0;">{full_name or username}</strong>,<br/><br/>
+        Your BullsEye account (<strong style="color:#e2e8f0;">@{username}</strong>) has been
+        <strong style="color:#10b981;">reinstated</strong>
+        {'automatically as your suspension period has ended.' if auto_expired else 'by our admin team.'}
+      </p>
+      <p style="color:#94a3b8;line-height:1.6;">
+        You can now sign in and access all features.
+        {'Please follow our community guidelines to avoid future suspensions.' if auto_expired else 'We hope this matter is resolved.'}
+      </p>
+      <div style="text-align:center;margin:32px 0;">
+        <a href="{APP_URL}" style="background:linear-gradient(135deg,#10b981,#06b6d4);color:white;
+           text-decoration:none;padding:14px 32px;border-radius:12px;font-weight:bold;
+           font-size:16px;display:inline-block;">🚀 Sign In to BullsEye</a>
+      </div>
+    </div>
+    """
+
+    payload = _json.dumps({
+        "sender":      {"name": "BullsEye", "email": "analysis.bullseye@gmail.com"},
+        "to":          [{"email": to_email}],
+        "subject":     "✅ Your BullsEye account has been reinstated",
+        "htmlContent": html,
+    }).encode()
+
+    req = urllib.request.Request(
+        "https://api.brevo.com/v3/smtp/email",
+        data=payload,
+        headers={"api-key": BREVO_API_KEY, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status == 201
+    except Exception as e:
+        print(f"⚠️  Unban email failed: {e}")
+
+
+def _send_manual_verify_email(to_email, full_name, username):
+    """Send manual verification email via Brevo."""
+    if not BREVO_API_KEY:
+        print(f"[DEV] Manual verify email not sent — BREVO_API_KEY not set. To: {to_email}")
+        return
+
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px;
+                background:#020617;color:#e2e8f0;border-radius:16px;">
+      <div style="text-align:center;margin-bottom:24px;">
+        <h1 style="color:white;margin:0;font-size:24px;">📈 BullsEye</h1>
+        <p style="color:#94a3b8;margin:4px 0 0;">Indian Stock Market Intelligence</p>
+      </div>
+      <h2 style="color:white;">Account Verified! 🎉</h2>
+      <p style="color:#94a3b8;line-height:1.6;">
+        Hi <strong style="color:#e2e8f0;">{full_name or username}</strong>,<br/><br/>
+        Your BullsEye account (<strong style="color:#e2e8f0;">@{username}</strong>) has been
+        <strong style="color:#10b981;">verified by our admin team</strong>.
+        You can now sign in and access all features.
+      </p>
+      <div style="text-align:center;margin:32px 0;">
+        <a href="{APP_URL}" style="background:linear-gradient(135deg,#10b981,#06b6d4);color:white;
+           text-decoration:none;padding:14px 32px;border-radius:12px;font-weight:bold;
+           font-size:16px;display:inline-block;">✅ Sign In Now</a>
+      </div>
+      <p style="color:#475569;font-size:11px;text-align:center;">
+        Welcome to BullsEye! Happy investing, @{username}.
+      </p>
+    </div>
+    """
+
+    payload = _json.dumps({
+        "sender":      {"name": "BullsEye", "email": "analysis.bullseye@gmail.com"},
+        "to":          [{"email": to_email}],
+        "subject":     "✅ Your BullsEye account has been verified",
+        "htmlContent": html,
+    }).encode()
+
+    req = urllib.request.Request(
+        "https://api.brevo.com/v3/smtp/email",
+        data=payload,
+        headers={"api-key": BREVO_API_KEY, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status == 201
+    except Exception as e:
+        print(f"⚠️  Manual verify email failed: {e}")
 
 def _send_welcome_email(to_email, full_name, username):
     """Send welcome email after successful email verification."""
@@ -311,9 +474,35 @@ def login():
         (User.username == identifier) | (User.email == identifier.lower())
     ).first()
 
-    # Wrong credentials — generic message (no info leak about whether user exists)
+    # Wrong credentials — generic message
     if not user or not user.check_password(password):
         return jsonify({'error': 'Invalid username/email or password'}), 401
+
+    # Check if user is banned — auto-expire if duration-based
+    if user.is_banned:
+        if user.banned_until and datetime.utcnow() > user.banned_until:
+            user.is_banned    = False
+            user.ban_reason   = None
+            user.banned_until = None
+            user.banned_at    = None
+            db.session.commit()
+            import threading
+            threading.Thread(
+                target=_send_unban_email,
+                args=(user.email, user.full_name, user.username),
+                kwargs={'auto_expired': True},
+                daemon=True,
+            ).start()
+            # Fall through — allow login
+        else:
+            until_str = user.banned_until.strftime('%d %b %Y') if user.banned_until else 'indefinitely'
+            return jsonify({
+                'error': f'Your account has been suspended {f"until {until_str}" if user.banned_until else "indefinitely"}.'
+                         f'{f" Reason: {user.ban_reason}" if user.ban_reason else ""}',
+                'is_banned':    True,
+                'banned_until': user.banned_until.isoformat() if user.banned_until else None,
+                'ban_reason':   user.ban_reason,
+            }), 403
 
     # Correct password but email not yet verified
     if not user.is_verified:
