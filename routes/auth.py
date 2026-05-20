@@ -145,7 +145,7 @@ def _send_deletion_email(to_email, full_name, username):
     """
 
     payload = _json.dumps({
-        "sender":      {"name": "BullsEye", "email": "majoka193@gmail.com"},
+        "sender":      {"name": "BullsEye", "email": "analysis.bullseye@gmail.com"},
         "to":          [{"email": to_email}],
         "subject":     "🗑️ Your BullsEye account has been deleted",
         "htmlContent": html,
@@ -221,7 +221,7 @@ def _send_welcome_email(to_email, full_name, username):
     """
 
     payload = _json.dumps({
-        "sender":      {"name": "BullsEye", "email": "majoka193@gmail.com"},
+        "sender":      {"name": "BullsEye", "email": "analysis.bullseye@gmail.com"},
         "to":          [{"email": to_email}],
         "subject":     "🎉 Welcome to BullsEye — You're all set!",
         "htmlContent": html,
