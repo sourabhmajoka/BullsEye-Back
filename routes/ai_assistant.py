@@ -97,7 +97,7 @@ def call_groq(messages, system_prompt):
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-120b",
         "messages": [{"role": "system", "content": system_prompt}] + messages,
         "max_tokens": 2000,
         "temperature": 0.7,
